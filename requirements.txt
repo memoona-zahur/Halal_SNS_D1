@@ -1,0 +1,36 @@
+# Packages for the virtual environment on your machine (downloading the models, running the
+# tests, the test page). Versions are the ones this project was tested with.
+#
+# Install PyTorch first, then this file (see the README, Quick start):
+#   pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+#
+# The Docker images do not use this file: they install from pyproject.toml.
+
+# service
+fastapi==0.154.0
+uvicorn[standard]==0.54.0
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
+pydantic==2.14.1
+pydantic-settings==2.16.1
+httpx==0.28.1
+python-multipart==0.0.20
+
+# models (worker, model download, model tests)
+transformers==5.20.2
+safetensors==0.8.0
+huggingface_hub==2.2.0
+pillow==13.0.0
+numpy==2.5.4
+rapidocr==3.10.0
+onnxruntime==1.31.0
+
+# checks
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.17.1
+mypy==2.4.0
+
+# this project, so `import moderation` works in the tests
+-e .

@@ -1,0 +1,142 @@
+# GPU stack: Postgres, database setup, API and worker.
+# Start: docker compose -f docker-compose.gpu.yml up -d --build
+
+name: halal-sns-ai
+
+x-app: &app
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  # Every setting in .env reaches the containers. The values under `environment` win over it.
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    DATABASE_URL: postgresql://moderation:moderation@postgres:5432/moderation
+    # Image hosts the worker may download from. Set in .env; empty refuses every URL.
+    IMAGE_ALLOWED_HOSTS: ${IMAGE_ALLOWED_HOSTS:-}
+    ALLOW_HTTP_LOCALHOST: ${ALLOW_HTTP_LOCALHOST:-false}
+
+x-worker: &worker
+  <<: *app
+  volumes:
+    # Weights come from `python model_download.py pull` on the host. Mounted at
+    # /app/models so the default *_MODEL_DIR settings resolve. Read-only: the worker never downloads.
+    - ./models:/app/models:ro
+    # Shared with `api`: raw image uploads (POST /v1/moderations/uploads) land here so the worker
+    # can read them back. Only used if IMAGE_ALLOWED_ROOT=/app/uploads is set in .env. A project
+    # folder (not a named volume) so the files are visible directly on the host, in ./uploads.
+    - ./uploads:/app/uploads
+  command:
+    - python
+    - -m
+    - moderation.worker
+  # A crash (for example a GPU failure) exits the process; it must always come back.
+  restart: unless-stopped
+
+x-worker-env: &worker-env
+  <<: *app-env
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: moderation
+      POSTGRES_PASSWORD: moderation
+      POSTGRES_DB: moderation
+    # Not published to the host: this machine runs an inbound tunnel for team testing, and
+    # only `api` needs to be reachable. Reach it with `docker exec -it <postgres container> psql ...`.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moderation -d moderation"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: moderation
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - moderation
+      - -d
+      - moderation
+      - -v
+      - ON_ERROR_STOP=1
+      - -f
+      - /migrations/001_init.sql
+    restart: "no"
+
+  api:
+    <<: *app
+    build:
+      context: .
+      target: api
+    environment:
+      <<: *app-env
+      API_KEYS: ${API_KEYS:-}
+    volumes:
+      - ./uploads:/app/uploads
+    command:
+      - uvicorn
+      - moderation.api:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - "8000:8000"
+
+  # Reverse tunnel for teammates testing from outside this machine. Points only at `api` -
+  # never give it the worker or postgres. Requires NGROK_AUTHTOKEN and NGROK_DOMAIN in .env
+  # (a reserved free-tier domain: https://dashboard.ngrok.com/domains).
+  ngrok:
+    image: ngrok/ngrok:3-alpine
+    restart: unless-stopped
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?set NGROK_AUTHTOKEN in .env}
+    command:
+      - http
+      - --domain=${NGROK_DOMAIN:?set NGROK_DOMAIN in .env}
+      - api:8000
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      # ngrok's local inspector/API, http://localhost:4040 - request logs, replay, status. Not public.
+      - "4040:4040"
+
+  # GPU worker. Needs an NVIDIA GPU. One process per GPU: each holds its own copy of the models,
+  # so two on a 4 GB card would overflow VRAM. Concurrency comes from FAST_WORKERS inside it.
+  worker:
+    <<: *worker
+    build:
+      context: .
+      target: worker
+    environment:
+      <<: *worker-env
+      DEVICE: auto
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  pgdata:

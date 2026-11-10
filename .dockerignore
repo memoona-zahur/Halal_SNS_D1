@@ -1,0 +1,15 @@
+# Build context = code and configs only. Weights are mounted at run time, never baked in.
+models/
+uploads/
+.venv/
+local/
+tools/
+testui/
+tests/
+docs/
+**/__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.env
+.claude/

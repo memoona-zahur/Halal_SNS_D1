@@ -1,0 +1,60 @@
+[project]
+name = "halal-sns-ai"
+version = "0.2.0"
+requires-python = ">=3.14"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "psycopg[binary]>=3.2",
+  "psycopg-pool>=3.2",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "httpx>=0.27",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+# Model runtime for the worker only. Install torch from the CUDA index first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+models = [
+  "torch>=2.11",
+  "transformers>=4.57",
+  "safetensors>=0.4",
+  "huggingface_hub>=0.34",
+  "pillow>=10",
+  "numpy>=2",
+  "rapidocr>=3.10",
+  "onnxruntime>=1.22",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["moderation*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+cache_dir = "local/.pytest_cache"
+
+[tool.ruff]
+cache-dir = "local/.ruff_cache"
+extend-exclude = ["local/backup"]
+
+[tool.mypy]
+check_untyped_defs = true
+files = ["moderation"]
+cache_dir = "local/.mypy_cache"
+plugins = ["pydantic.mypy"]
+
+# torch and onnxruntime are optional and imported lazily inside functions;
+# they are not installed on the CPU-only dev path.
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true

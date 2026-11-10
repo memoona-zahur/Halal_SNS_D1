@@ -1,0 +1,113 @@
+# CPU stack: Postgres, database setup, API and worker.
+# Start: docker compose -f docker-compose.cpu.yml up -d --build
+
+name: halal-sns-ai
+
+x-app: &app
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  # Every setting in .env reaches the containers. The values under `environment` win over it.
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    DATABASE_URL: postgresql://moderation:moderation@postgres:5432/moderation
+    # Image hosts the worker may download from. Set in .env; empty refuses every URL.
+    IMAGE_ALLOWED_HOSTS: ${IMAGE_ALLOWED_HOSTS:-}
+    ALLOW_HTTP_LOCALHOST: ${ALLOW_HTTP_LOCALHOST:-false}
+
+x-worker: &worker
+  <<: *app
+  volumes:
+    # Weights come from `python model_download.py pull` on the host. Mounted at
+    # /app/models so the default *_MODEL_DIR settings resolve. Read-only: the worker never downloads.
+    - ./models:/app/models:ro
+    # Shared with `api`: raw image uploads (POST /v1/moderations/uploads) land here so the worker
+    # can read them back. Only used if IMAGE_ALLOWED_ROOT=/app/uploads is set in .env. A project
+    # folder (not a named volume) so the files are visible directly on the host, in ./uploads.
+    - ./uploads:/app/uploads
+  command:
+    - python
+    - -m
+    - moderation.worker
+  # A crash (for example a GPU failure) exits the process; it must always come back.
+  restart: unless-stopped
+
+x-worker-env: &worker-env
+  <<: *app-env
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: moderation
+      POSTGRES_PASSWORD: moderation
+      POSTGRES_DB: moderation
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moderation -d moderation"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: moderation
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - moderation
+      - -d
+      - moderation
+      - -v
+      - ON_ERROR_STOP=1
+      - -f
+      - /migrations/001_init.sql
+    restart: "no"
+
+  api:
+    <<: *app
+    build:
+      context: .
+      target: api
+    volumes:
+      - ./uploads:/app/uploads
+    command:
+      - uvicorn
+      - moderation.api:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - "8000:8000"
+
+  # CPU worker. No GPU needed. Slower per post; the lease is renewed while a job runs.
+  worker:
+    <<: *worker
+    build:
+      context: .
+      target: worker
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cpu
+    environment:
+      <<: *worker-env
+      DEVICE: cpu
+
+volumes:
+  pgdata:

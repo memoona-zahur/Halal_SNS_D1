@@ -1,0 +1,5 @@
+# Local-only test stack next to the shared one: own database, API on 127.0.0.1:8001, GPU worker, no ngrok.
+services:
+  api:
+    ports: !override
+      - "127.0.0.1:8001:8000"
